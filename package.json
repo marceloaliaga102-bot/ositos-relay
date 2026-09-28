@@ -1,0 +1,16 @@
+{
+  "name": "ositos-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Servidor de reenvio de Batalla de Ositos. Empareja a dos telefonos por el codigo de la sala y les pasa los mensajes. No juega, no simula la pelea y no guarda nada.",
+  "main": "relay.js",
+  "scripts": {
+    "start": "node relay.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED"
+}

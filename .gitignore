@@ -1,0 +1,8 @@
+# Ignora la copia del servidor que se sube a GitHub por separado: es un
+# repositorio independiente, con su propio historial.
+/ositos-relay/
+
+node_modules/
+npm-debug.log*
+.env
+.DS_Store
