@@ -52,6 +52,8 @@ const PUERTO_POR_DEFECTO = 80;
 const T_HELLO = 1, T_WELCOME = 2, T_READY = 3;
 const T_INPUT = 4, T_INPUTS = 5, T_SNAP = 6;
 const T_PING = 7, T_PONG = 8, T_BYE = 9, T_ERROR = 10, T_FIN = 11;
+const T_LISTAR = 12, T_SALAS = 13;
+const T_INFO = 14;
 
 /** Una sala olvidada se borra sola pasado este tiempo. */
 const DURACION_SALA = 10 * 60 * 1000;
@@ -215,12 +217,22 @@ function registra(codigo, rol, cliente) {
   let sala = salas.get(codigo);
   const ahora = Date.now();
   if (!sala || (ahora - sala.t > DURACION_SALA && !llena(sala))) {
-    sala = { anfitrion: null, invitado: null, t: ahora };
+    sala = { anfitrion: null, invitado: null, t: ahora, nombre: '', reglas: null };
     salas.set(codigo, sala);
   }
   if (sala[rol]) return false;         // ya habia alguien en ese papel
   sala[rol] = cliente;
   sala.t = ahora;
+  // El nombre de la sala **no** es el del jugador: lo pone el anfitrion despues
+  // con el mensaje de INFO. Aqui solo se deja un nombre por defecto para que la
+  // lista tenga algo que enseñar en los primeros milisegundos, antes de que
+  // llegue ese mensaje.
+  if (!sala.nombre) {
+    sala.nombre = cliente.nombre ? `Sala de ${cliente.nombre}`.slice(0, 28) : '';
+  }
+  // La lista se refresca sola cada pocos segundos en el movil, asi que no
+  // hace falta avisar a nadie aqui.
+  if (!llena(sala)) return true;
   if (!llena(sala)) return true;
 
   // Los dos dentro: se avisa a los dos y empieza la pelea.
@@ -269,6 +281,7 @@ function recibe(cliente, mensaje) {
   if (!mensaje || mensaje.length < 1) return;
   const tipo = mensaje[0];
   const cuerpo = mensaje.slice(5);      // 1 de tipo + 4 de largo
+  if (process.env.RELAY_DEBUG) console.log(`recibe tipo ${tipo} de ${cuerpo.length} bytes`);
 
   if (tipo === T_HELLO) {
     if (cuerpo.length < 2) return;
@@ -281,16 +294,33 @@ function recibe(cliente, mensaje) {
     const leido = leeTexto(cuerpo, pos);
     const codigo = leido.texto.trim().toUpperCase();
     pos = leido.pos;
+    // El nombre del jugador. Lo siguiente en el saludo es su osito, que aqui no
+    // hace falta para nada: el reparto de ositos lo hace el anfitrion al mandar
+    // las reglas. Se lee el nombre solo para tener algo que enseñar en la lista.
+    const leidoNombre = leeTexto(cuerpo, pos);
+    const nombre = leidoNombre.texto;
 
     if (!/^[0-9]{6}$/.test(codigo)) {
       error(cliente, 'El codigo de la sala son 6 digitos');
       return;
     }
     cliente.codigo = codigo;
+    cliente.nombre = nombre.slice(0, 28);
     cliente.rol = anfitrion ? 'anfitrion' : 'invitado';
     if (!registra(codigo, cliente.rol, cliente)) {
       error(cliente, 'Esa sala ya tiene a los dos jugadores');
     }
+  } else if (tipo === T_INFO) {
+    // Las reglas de la sala. El anfitrion las manda al abrir, para que quien
+    // mira la lista sepa de que va la partida antes de entrar. Si no vinieran,
+    // la lista solo podria decir el codigo y el nombre, que es menos util.
+    if (cliente.rol === 'anfitrion' && cliente.codigo) {
+      anotaInfo(cliente.codigo, cuerpo);
+    }
+  } else if (tipo === T_LISTAR) {
+    // Pedir la lista no es entrar en nada. Por eso va antes que el "primero
+    // hay que entrar en la sala": quien llega aqui solo esta mirando.
+    listaSalas(cliente);
   } else if (tipo === T_PING) {
     envia(cliente, T_PONG);
   } else if (tipo === T_BYE) {
@@ -303,6 +333,99 @@ function recibe(cliente, mensaje) {
     }
     reenvia(cliente.codigo, cliente, tipo, cuerpo);
   }
+}
+
+/**
+ * Lo que el anfitrion ha mandado de su sala: las reglas y el nombre.
+ *
+ * El nombre va **aqui** y no en el saludo a proposito. En el saludo solo se
+ * presenta el jugador; las reglas y el nombre de la sala se eligen despues, en
+ * la pantalla de crear partida. Mandandolo todo junto secia mas corto, pero
+ * obligaria al servidor a entender reglas para algo que no decide: el servidor
+ * no juega, no simula y no manda sobre nada de la partida. Solo guarda estos
+ * datos para poder enseñarlos en la lista de salas.
+ *
+ * El cuerpo es: version(1) mapa(1) noche(1) duracion(4) amor(4) texto.
+ */
+function anotaInfo(codigo, cuerpo) {
+  const sala = salas.get(codigo);
+  if (!sala) return;
+  if (cuerpo.length < 15) return;
+  sala.reglas = {
+    mapa: cuerpo[1],
+    noche: cuerpo[2] !== 0,
+    duracion: cuerpo.readInt32BE(3),
+    amor: cuerpo.readInt32BE(7),
+  };
+  const nombre = leeTexto(cuerpo, 11);
+  // Un nombre vacio no borra el que habia: si la app no lo manda, se deja el
+  // que se sepa y ya.
+  if (nombre.texto.trim()) sala.nombre = nombre.texto.trim().slice(0, 28);
+}
+
+/**
+ * Escribe un texto con su longitud delante: 4 bytes, como hace la app.
+ *
+ * Se limita a 28 caracteres porque lo que sale es a pantalla, en la lista de
+ * salas de cualquiera. Sin tope, un nombre larguisimo descuadra la pantalla del
+ * otro.
+ */
+function texto(valor) {
+  const b = Buffer.from(String(valor || '').slice(0, 28), 'utf8');
+  const sal = Buffer.alloc(4 + b.length);
+  sal.writeUInt32BE(b.length, 0);
+  b.copy(sal, 4);
+  return sal;
+}
+
+/**
+ * La lista de salas abiertas, para quien la pide.
+ *
+ * Se mandan solo las que tienen a alguien dentro esperando: una sala vacia no
+ * sirve para nada y solo haria ruido. Se filtran las llenas tambien, porque no
+ * se puede entrar en ellas.
+ */
+function listaSalas(cliente) {
+  const ahora = Date.now();
+  const visibles = [];
+  for (const [codigo, sala] of salas) {
+    if (!llena(sala)) continue;
+    if (ahora - sala.t > DURACION_SALA) continue;
+    const r = sala.reglas;
+    visibles.push({
+      codigo,
+      nombre: (sala.nombre || '').trim() || `Sala de ${codigo.slice(-2)}`,
+      mapa: r ? r.mapa : 0,
+      noche: r ? r.noche : false,
+      duracion: r ? r.duracion : 0,
+      amor: r ? r.amor : 0,
+      hace: Math.floor((ahora - sala.t) / 1000),
+    });
+  }
+  // De las mas nueva a mas vieja: la que se acaba de abrir es la que mas
+  // probabilidad tiene de seguir esperando a alguien.
+  visibles.sort((a, b) => a.hace - b.hace);
+  // Un tope por si alguien abre muchisimas salas: el mensaje tiene que caber
+  // comodo en una trama.
+  const hasta = visibles.slice(0, 50);
+
+  const partes = [Buffer.from([VERSION]), enteroBE(hasta.length)];
+  for (const s of hasta) {
+    partes.push(
+      texto(s.codigo), texto(s.nombre),
+      Buffer.from([s.mapa, s.noche ? 1 : 0]),
+      enteroBE(s.duracion), enteroBE(s.amor),
+      enteroBE(2), enteroBE(s.hace),
+    );
+  }
+  envia(cliente, T_SALAS, Buffer.concat(partes));
+}
+
+/** Entero de 4 bytes en grande endian, que es como los escribe la app. */
+function enteroBE(v) {
+  const b = Buffer.alloc(4);
+  b.writeInt32BE(v | 0, 0);
+  return b;
 }
 
 function leeTexto(buf, desde) {
