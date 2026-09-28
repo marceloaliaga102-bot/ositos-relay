@@ -348,7 +348,7 @@ servidor.listen(PUERTO, () => {
     console.log('pon PORT=8099, porque el puerto 80 necesita permisos de administrador.');
   }
   if (MANTENER_DESPERTADO > 0) {
-    console.log(`Mantendrandose despierto cada ${MANTENER_DESPERTADO / 1000} s (PING_MS).`);
+    console.log(`Manteniendose despierto cada ${MANTENER_DESPERTADO / 1000} s (PING_MS).`);
     setInterval(() => {
       // Un plan gratuito apaga el servicio si pasa ratos sin recibir nada. Esta
       // peticion a si mismo lo evita, pero **no** se pone por defecto: en Render

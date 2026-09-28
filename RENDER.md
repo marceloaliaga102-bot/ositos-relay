@@ -4,42 +4,37 @@ Render tiene plan gratuito, **no pide tarjeta** y habla WebSocket, que es lo
 que necesita el juego. Tarda unos 15 minutos, casi todos esperando a que construya
 el proyecto.
 
-Antes de nada, una decisión que ahorra Warden el primer despliegue:
+Antes de nada, una decisión que ahorra el primer despliegue:
 
-> **Crea un repositorio solo con el servidor.** No subas el proyecto entero de
-> Android. Render vería un `build.gradle` y puede intentar construir la app, que
-> necesita Android SDK, y fallaría. Con un repositorio de 3 archivos va limpio y
+> **El repositorio del servidor va solo, sin el proyecto de Android.** Render
+> vería un `build.gradle` e intentaría construir la app, que necesita el SDK de
+> Android, y el despliegue fallaría. Con un repositorio de 5 archivos va limpio y
 > en segundos.
 
 ---
 
-## 1. El repositorio (3 archivos)
+## 1. El repositorio (ya está)
 
-Crea un repositorio nuevo en GitHub, llamado por ejemplo `ositos-relay`, y
-súbele **estos tres archivos**:
+Está creado y subido:
+
+**https://github.com/marceloaliaga102-bot/ositos-relay**
 
 ```
 ositos-relay/
-├── relay.js
-├── package.json
-└── README.md          (opcional, la guia esta dentro)
+├── relay.js        el servidor entero
+├── package.json    solo para que Render sepa que es Node
+├── README.md
+├── RENDER.md       esta guia
+└── .gitignore
 ```
 
-Los tienes en `tools/servidor/` de este proyecto. Lo mas comodo desde el PC, con
-Git instalado:
+Es público. No hay secretos dentro (ni claves, ni datos de nadie): es un
+reenviador de mensajes y ya. Por eso Render lo encuentra sin que haya que
+autorizarlo de nada.
 
-```powershell
-cd C:\ruta\del\proyecto\tools\servidor
-git init
-git add relay.js package.json
-git commit -m "Servidor de reenvio de Batalla de Ositos"
-git branch -M main
-git remote add origin https://github.com/TU-USUARIO/ositos-relay.git
-git push -u origin main
-```
-
-O, si no quieres usar la terminal, creates el repositorio vacio en GitHub y
-arrastras los archivos a la pagina.
+Si algún dia lo quisieras privado, desde GitHub: **Settings → Danger Zone →
+Change visibility**. Si lo haces, después tendras que volver a autorizar a
+Render para ese repositorio.
 
 ## 2. Crear el servicio
 
@@ -165,23 +160,45 @@ inmediata. **Ganaste los 50 segundos y todo lo que viene de malo**, sin pagar.
 Se pierde la partida en curso, pero no se rompe nada: el juego avisa "se perdio la
 conexion" y vuelve al menu. Vuelve a crear la partida y ya.
 
-## Comprobar que va sin telefonos
+## Comprobar que va, sin telefonos
 
-En el PC, con el servidor ya desplegado, esto te dice si el problema es el
-servidor o la red del telefono:
+Pega esto en PowerShell sustituyendo `TU-SERVICIO` por lo que te haya dado
+Render. Son dos comprobaciones y te dicen en cual falla:
 
 ```powershell
-$u = "ositos-relay.onrender.com"
-# 1. que el servidor responde
-(Invoke-WebRequest "https://$u" -UseBasicParsing).Content
-# 2. que el handshake de WebSocket llega ahi
-$s = New-Object System.Net.Sockets.TcpClient
-$r = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$h = "TU-SERVICIO.onrender.com"
+
+# 1. El proceso responde y el puerto web esta abierto.
+#    Debe salir: Batalla de Ositos: 0 sala(s) abierta(s)
+(Invoke-WebRequest "https://$h" -UseBasicParsing -TimeoutSec 60).Content
+
+# 2. El saludo de WebSocket llega ahi (el juego se conecta por aqui).
+#    Debe salir: HTTP/1.1 101 Switching Protocols
+$tcp = New-Object System.Net.Sockets.TcpClient
+$tcp.Connect($h, 443)
+$ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, ({ $true }))
+$ssl.AuthenticateAsClient($h)
+$clave = [Convert]::ToBase64String((1..16 | ForEach-Object { Get-Random -Max 256 }))
+$peticion = "GET / HTTP/1.1`r`nHost: $h`r`nUpgrade: websocket`r`n" +
+  "Connection: Upgrade`r`nSec-WebSocket-Key: $clave`r`n" +
+  "Sec-WebSocket-Version: 13`r`n`r`n"
+$bytes = [System.Text.Encoding]::ASCII.GetBytes($peticion)
+$ssl.Write($bytes, 0, $bytes.Length)
+$buf = New-Object byte[] 200
+$n = $ssl.Read($buf, 0, 200)
+[System.Text.Encoding]::ASCII.GetString($buf, 0, $n)
+$ssl.Dispose()
+$tcp.Close()
 ```
 
-Mas facil: si la pagina responde y los dos telefonos se encuentran, todo esta
-bien. Si la pagina responde pero los telefonos no se ven, casi siempre es que
-escribieron **codigos distintos**.
+Que significa cada resultado:
+
+| Que pasa | Que significa |
+|---|---|
+| Ni el 1 llega | El servicio esta dormido (normal los primeros 15 minutos). Espera y repite. |
+| 1 responde y 2 sale `101` | **Todo bien.** El servidor vive y acepta el juego. Si los telefonos no se ven, casi seguro es codigo distinto. |
+| 1 responde y 2 sale `400` o nada | El despliegue quedo a medias. Mira los logs en Render. |
+| `EACCES` en los logs | Falta la variable `PORT = 8099`. |
 
 ## Alternativas a Render
 
