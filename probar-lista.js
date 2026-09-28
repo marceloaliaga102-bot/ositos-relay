@@ -274,12 +274,28 @@ async function main() {
     solo.envia(12, Buffer.alloc(0));
     const sinRival = await solo.esperaTipo(13, 5000);
     const nSinRival = sinRival.readInt32BE(6);
-    if (nSinRival !== 0) {
-      console.log('   DEPURAR sinRival =', JSON.stringify(sinRival.join(',')));
-      console.log('   DEPURAR como texto =', JSON.stringify(sinRival.toString('latin1')));
-      throw new Error(`una sala sin rival sale en la lista (${nSinRival})`);
+    // Una sala a la que le falta un jugador **si** tiene que salir en la lista:
+    // es justo para eso. Para entrar por la lista hace falta ver las que estan
+    // esperando. Antes solo se publicaban las llenas, y eso hacia la lista
+    // inútil: una sala solo se publicaba cuando ya tenia a los dos dentro, que
+    // es cuando nadie la necesita.
+    if (nSinRival !== 1) {
+      throw new Error(`una sala a la que le falta uno tiene que salir; salen ${nSinRival}`);
     }
-    console.log('  ok   una sala sin rival no sale en la lista');
+    console.log('  ok   una sala a medio llenar sale en la lista');
+    // Y tiene que decir que le falta uno, para que se sepa que se puede entrar.
+    {
+      let p = 10;
+      p += 4 + sinRival.readUInt32BE(p);
+      p += 4 + sinRival.readUInt32BE(p);
+      p += 2;                              // mapa y noche
+      p += 4 + 4;                         // duracion y amor
+      const cuantos = sinRival.readInt32BE(p);
+      if (cuantos !== 1) {
+        throw new Error(`tiene que decir que le falta uno; dice ${cuantos}`);
+      }
+      console.log('  ok   y avisa de que le falta un jugador');
+    }
     solo.cierra();
 
     // 3. Entra el invitado: ahora sale, con nombre y reglas.
@@ -320,7 +336,13 @@ const cuantas = conRival.readInt32BE(6);
     if (dur !== 300) throw new Error('la duracion no cuadra');
     if (amor !== 1000) throw new Error('el limite de amor no cuadra');
 
-    // 4. Al irse el invitado, la sala desaparece.
+    // 4. Al irse el invitado, la sala sigue pero pasando a "le falta uno", y
+    //    cuando se va el otro tambien, ya no sale.
+    //
+    //    Antes se comprobaba que la sala desaparecia de golpe. Con la regla
+    //    nueva (publicar tambien las medias) eso ya no es lo que tiene que
+    //    pasar: una sala con el anfitrion solo **debe** seguir en la lista,
+    //    porque es una sala a la que se puede entrar.
     b.cierra();
     await new Promise((r) => setTimeout(r, 600));
     const despues = new Cliente();
@@ -328,8 +350,24 @@ const cuantas = conRival.readInt32BE(6);
     despues.envia(12, Buffer.alloc(0));
     const trasSalir = await despues.esperaTipo(13, 5000);
     const nTras = trasSalir.readInt32BE(6);
-    if (nTras !== 0) throw new Error(`al irse el otro, la sala sigue en la lista (${nTras})`);
-    console.log('  ok   al irse el otro, la sala desaparece');
+    if (nTras !== 1) {
+      throw new Error(`tras irse uno deberia quedar la sala a medio llenar; salen ${nTras}`);
+    }
+    console.log('  ok   al irse uno, la sala queda a medio llenar y se puede entrar');
+
+    // Ahora se va el anfitrion: ya no hay nadie, y la sala desaparece.
+    a.cierra();
+    await new Promise((r) => setTimeout(r, 600));
+    const ultimo = new Cliente();
+    await ultimo.conecta(PUERTO);
+    ultimo.envia(12, Buffer.alloc(0));
+    const sinNadie = await ultimo.esperaTipo(13, 5000);
+    const nSinNadie = sinNadie.readInt32BE(6);
+    if (nSinNadie !== 0) {
+      throw new Error(`sin nadie dentro no deberia quedar ninguna sala; quedan ${nSinNadie}`);
+    }
+    console.log('  ok   sin nadie dentro, la sala desaparece');
+    ultimo.cierra();
 
     a.cierra();
     lista.cierra();

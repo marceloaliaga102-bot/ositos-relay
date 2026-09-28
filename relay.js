@@ -389,7 +389,12 @@ function listaSalas(cliente) {
   const ahora = Date.now();
   const visibles = [];
   for (const [codigo, sala] of salas) {
-    if (!llena(sala)) continue;
+    // Antes solo se publicaban las salas **llenas**, y eso hacia la lista
+    // inútil: una sala solo se publicaba cuando ya tenia a los dos dentro, que
+    // es justo cuando nadie la necesita. Para entrar por la lista hace falta
+    // ver las que estan a medio llenar, que son las unicas que se pueden
+    // entrar. Ahora se publican todas las que tienen a alguien esperando.
+    if (!sala.anfitrion && !sala.invitado) continue;
     if (ahora - sala.t > DURACION_SALA) continue;
     const r = sala.reglas;
     visibles.push({
@@ -399,6 +404,9 @@ function listaSalas(cliente) {
       noche: r ? r.noche : false,
       duracion: r ? r.duracion : 0,
       amor: r ? r.amor : 0,
+      // 2 = llena, 1 = le falta uno. La app lo enseña para que se sepa si se
+      // puede entrar antes de intentarlo.
+      cuantos: llena(sala) ? 2 : 1,
       hace: Math.floor((ahora - sala.t) / 1000),
     });
   }
@@ -415,7 +423,10 @@ function listaSalas(cliente) {
       texto(s.codigo), texto(s.nombre),
       Buffer.from([s.mapa, s.noche ? 1 : 0]),
       enteroBE(s.duracion), enteroBE(s.amor),
-      enteroBE(2), enteroBE(s.hace),
+      // cuantos hay dentro de verdad, no un 2 fijo: antes ponia 2 siempre, y
+      // la app se creia que todas las salas estaban llenas cuando lo que
+      // acababa de publicar son las que estaban esperando a alguien.
+      enteroBE(s.cuantos), enteroBE(s.hace),
     );
   }
   envia(cliente, T_SALAS, Buffer.concat(partes));
